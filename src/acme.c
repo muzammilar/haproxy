@@ -418,6 +418,38 @@ static int cfg_parse_acme_kws(char **args, int section_type, struct proxy *curpx
 			ha_alert("parsing [%s:%d]: out of memory.\n", file, linenum);
 			goto out;
 		}
+	} else if (strcmp(args[0], "eab-key-id") == 0) {
+		if (!*args[1]) {
+			ha_alert("parsing [%s:%d]: keyword '%s' in '%s' section requires an argument\n", file, linenum, args[0], cursection);
+			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		if (alertif_too_many_args(1, file, linenum, args, &err_code))
+			goto out;
+
+		ha_free(&cur_acme->eab.kid_file);
+		cur_acme->eab.kid_file = strdup(args[1]);
+		if (!cur_acme->eab.kid_file) {
+			err_code |= ERR_ALERT | ERR_FATAL;
+			ha_alert("parsing [%s:%d]: out of memory.\n", file, linenum);
+			goto out;
+		}
+	} else if (strcmp(args[0], "eab-mac-key") == 0) {
+		if (!*args[1]) {
+			ha_alert("parsing [%s:%d]: keyword '%s' in '%s' section requires an argument\n", file, linenum, args[0], cursection);
+			err_code |= ERR_ALERT | ERR_FATAL;
+			goto out;
+		}
+		if (alertif_too_many_args(1, file, linenum, args, &err_code))
+			goto out;
+
+		ha_free(&cur_acme->eab.mac_key_file);
+		cur_acme->eab.mac_key_file = strdup(args[1]);
+		if (!cur_acme->eab.mac_key_file) {
+			err_code |= ERR_ALERT | ERR_FATAL;
+			ha_alert("parsing [%s:%d]: out of memory.\n", file, linenum);
+			goto out;
+		}
 	} else if (strcmp(args[0], "challenge") == 0) {
 		if ((!*args[1]) ||
 		    ((strcasecmp("http-01", args[1]) != 0) &&
@@ -799,21 +831,87 @@ static int cfg_postsection_acme()
 	char *errmsg = NULL;
 	char *path;
 	char store_path[PATH_MAX]; /* complete path with crt_base */
+	int rv = 0;
 	struct stat st;
 
 	/* if dns-persist-01 is set, add an extra INITIAL_DNS check */
 	if (strcasecmp(cur_acme->challenge, "dns-persist-01") == 0)
 		cur_acme->cond_ready |= ACME_RDY_INITIAL_DNS;
 
-	/* if account key filename is unspecified, choose a filename for it */
-	if (!cur_acme->account.file) {
-		if (!memprintf(&cur_acme->account.file, "%s.account.key", cur_acme->name)) {
-			err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
-			ha_alert("acme: out of memory.\n");
-			goto out;
-		}
+	/* if either account key, eab kid, or mac key filename is unspecified, choose a filename for it */
+	if ((!cur_acme->account.file && !memprintf(&cur_acme->account.file, "%s.account.key", cur_acme->name))
+	   || (!cur_acme->eab.kid_file && !memprintf(&cur_acme->eab.kid_file, "%s.eab.id", cur_acme->name))
+	   || (!cur_acme->eab.mac_key_file && !memprintf(&cur_acme->eab.mac_key_file, "%s.eab.key", cur_acme->name))) {
+		err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+		ha_alert("acme: out of memory.\n");
+		goto out;
 	}
 
+	if (global_ssl.crt_base && *cur_acme->eab.kid_file != '/')
+		rv = read_line_to_trash("%s/%s", global_ssl.crt_base, cur_acme->eab.kid_file);
+	else
+		rv = read_line_to_trash("%s", cur_acme->eab.kid_file);
+
+	/* if read at least one character successfully */
+	if (rv >= 1) {
+		const char *p;
+		cur_acme->eab.kid = my_strndup(trash.area, trash.data);
+		if (!cur_acme->eab.kid) {
+			ha_alert("acme: out of memory.\n");
+			err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+			goto out;
+		}
+
+		/* technically ACME RFC allows any ASCII string here,
+		 * but in practice CAs usually provide key id as a base64url encoded secret or an UUID */
+		for (p = cur_acme->eab.kid; *p; p++) {
+			if (!isalnum((uchar)*p) && *p != '-' && *p != '_') {
+				ha_warning("acme: section '%s': EAB key id contains strange character '%c'.\n",  cur_acme->name, *p);
+				break; /* no need to print this warning many times */
+			}
+		}
+	} else if (rv == 0) {
+		/* empty files are allowed, but issue a warning */
+		ha_warning("acme: section '%s': EAB key id from '%s' is empty.\n", cur_acme->name, cur_acme->eab.kid_file);
+	}
+
+	if (global_ssl.crt_base && *cur_acme->eab.mac_key_file != '/')
+		rv = read_line_to_trash("%s/%s", global_ssl.crt_base, cur_acme->eab.mac_key_file);
+	else
+		rv = read_line_to_trash("%s", cur_acme->eab.mac_key_file);
+
+	if (rv >= 1) {
+		struct buffer *dec_mac = get_trash_chunk();
+
+		rv = base64dec(trash.area, trash.data, dec_mac->area, dec_mac->size);
+		if (rv < 0) {
+			ha_alert("acme: section '%s': failed to base64url decode EAB mac key.\n", cur_acme->name);
+			err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+			goto out;
+		}
+		dec_mac->data = rv;
+
+		if (rv < 32) {
+			ha_alert("acme: section '%s': EAB mac key from '%s' is only %d bytes long, but at least 32 bytes is required for the specified mac type.\n",
+			     cur_acme->name, cur_acme->eab.kid_file, rv);
+			err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+			goto out;
+		}
+
+		if (chunk_dup(&cur_acme->eab.mac_key, dec_mac) == NULL) {
+			ha_alert("acme: out of memory.\n");
+			err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+			goto out;
+		}
+	} else if (rv == 0) {
+		ha_warning("acme: section '%s': EAB mac key from '%s' is empty.\n", cur_acme->name, cur_acme->eab.mac_key_file);
+	}
+
+	if ((cur_acme->eab.mac_key.data == 0) != (cur_acme->eab.kid == NULL)) {
+		ha_alert("acme: section '%s': EAB mac key and key id are mutually dependent, specify both or neither.\n", cur_acme->name);
+		err_code |= ERR_ALERT | ERR_FATAL | ERR_ABORT;
+		goto out;
+	}
 
 	if (global_ssl.crt_base && *cur_acme->account.file != '/') {
 		int rv;
@@ -988,6 +1086,8 @@ void deinit_acme()
 		ha_free(&acme_cfgs->challenge);
 		ha_free(&acme_cfgs->map);
 		ha_free(&acme_cfgs->profile);
+		chunk_destroy(&acme_cfgs->eab.mac_key);
+		ha_free(&acme_cfgs->eab.kid);
 
 		free(acme_cfgs);
 		acme_cfgs = next;
@@ -1010,6 +1110,8 @@ static struct cfg_kw_list cfg_kws_acme = {ILH, {
 	{ CFG_ACME, "challenge-ready",  cfg_parse_acme_kws },
 	{ CFG_ACME, "dns-delay",  cfg_parse_acme_kws },
 	{ CFG_ACME, "dns-timeout",  cfg_parse_acme_kws },
+	{ CFG_ACME, "eab-key-id",  cfg_parse_acme_kws },
+	{ CFG_ACME, "eab-mac-key",  cfg_parse_acme_kws },
 	{ CFG_ACME, "acme-vars",  cfg_parse_acme_vars_provider },
 	{ CFG_ACME, "provider-name",  cfg_parse_acme_vars_provider },
 	{ CFG_GLOBAL, "acme.scheduler", cfg_parse_global_acme_sched },
@@ -1265,6 +1367,46 @@ error:
 	free_trash_chunk(b64prot);
 	free_trash_chunk(b64payload);
 
+
+	return ret;
+}
+
+int acme_jws_eab_payload(struct ist url, EVP_PKEY *acc_key, struct buffer mac_key, char *kid, struct buffer *output, char **errmsg)
+{
+	struct buffer *b64payload = NULL;
+	struct buffer *b64prot = NULL;
+	struct buffer *b64sign = NULL;
+	struct buffer *jwk = NULL;
+	enum jwt_alg alg = JWS_ALG_HS256;
+	int ret = 1;
+
+	b64payload = alloc_trash_chunk();
+	b64prot = alloc_trash_chunk();
+	jwk = alloc_trash_chunk();
+	b64sign = alloc_trash_chunk();
+
+	if (!b64payload || !b64prot || !jwk || !b64sign || !output) {
+		memprintf(errmsg, "out of memory");
+		goto error;
+	}
+
+	jwk->data = EVP_PKEY_to_pub_jwk(acc_key, jwk->area, jwk->size);
+
+	b64payload->data = jws_b64_payload(jwk->area, b64payload->area, b64payload->size);
+	b64prot->data = jws_b64_protected(alg, kid, NULL, NULL, url.ptr, b64prot->area, b64prot->size);
+	b64sign->data = jws_b64_hmac_signature(mac_key.area, mac_key.data, alg, b64prot->area, b64payload->area, b64sign->area, b64sign->size);
+	output->data = jws_flattened(b64prot->area, b64payload->area, b64sign->area, output->area, output->size);
+
+	if (output->data == 0)
+		goto error;
+
+	ret = 0;
+
+error:
+	free_trash_chunk(b64payload);
+	free_trash_chunk(b64prot);
+	free_trash_chunk(jwk);
+	free_trash_chunk(b64sign);
 
 	return ret;
 }
@@ -2211,20 +2353,28 @@ int acme_req_account(struct task *task, struct acme_ctx *ctx, int newaccount, ch
 {
 	struct buffer *req_in = NULL;
 	struct buffer *req_out = NULL;
+	struct buffer *eab_req_out = NULL;
 	const struct http_hdr hdrs[] = {
 		{ IST("Content-Type"), IST("application/jose+json") },
 		{ IST_NULL, IST_NULL }
 	};
 	int ret = 1;
 
-        if ((req_in = alloc_trash_chunk()) == NULL)
+	if ((req_in = alloc_trash_chunk()) == NULL)
 		goto error;
-        if ((req_out = alloc_trash_chunk()) == NULL)
+	if ((req_out = alloc_trash_chunk()) == NULL)
+		goto error;
+	if ((eab_req_out = alloc_trash_chunk()) == NULL)
 		goto error;
 
 	if (newaccount) {
 		chunk_appendf(req_in, "{");
-		if (ctx->cfg->account.contact != NULL)
+		if (ctx->cfg->eab.mac_key.data > 0 && ctx->cfg->eab.kid != NULL) {
+			if (acme_jws_eab_payload(ctx->resources.newAccount, ctx->cfg->account.pkey, ctx->cfg->eab.mac_key, ctx->cfg->eab.kid, eab_req_out, errmsg) != 0)
+				goto out;
+			chunk_appendf(req_in, "\"externalAccountBinding\": %.*s,", (int)eab_req_out->data, eab_req_out->area);
+		}
+		if (ctx->cfg->account.contact)
 			chunk_appendf(req_in, "\"contact\": [ \"mailto:%s\" ],", ctx->cfg->account.contact);
 		chunk_appendf(req_in, "\"termsOfServiceAgreed\": true");
 		chunk_appendf(req_in, "}");
@@ -2246,6 +2396,7 @@ error:
 out:
 	free_trash_chunk(req_in);
 	free_trash_chunk(req_out);
+	free_trash_chunk(eab_req_out);
 
 	return ret;
 }

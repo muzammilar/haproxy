@@ -32660,6 +32660,20 @@ Example:
       curves P-384
       map virt@acme
 
+eab-mac-key <filename>
+eab-key-id <filename>
+  Configure the path to the EAB MAC key and EAB key id credential pair. You
+  should get credentials from you CA and place them at the specified path
+  before launching HAProxy. If not explicitly specified, HAProxy will try to
+  load a file based on an acme section name similar to "account-key" keyword,
+  "<name>.eab.id" for the key id, "<name>.eab.key" for the mac key, where
+  "<name>" is the name of the current acme section. If the file doesn't exist,
+  or is empty, HAProxy will ignore it. Whitespace in the file is NOT ignored.
+
+  EAB key id file should be a plain ASCII string that CA provides as an id.
+  EAB MAC key file should be a base64url encoded MAC key that CA provides.
+  EAB credentials are used only during the initial ACME account creation, and
+  can be removed afterwards.
 
 12.9. Healthchecks
 ------------------
