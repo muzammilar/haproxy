@@ -32675,6 +32675,11 @@ eab-key-id <filename>
   EAB credentials are used only during the initial ACME account creation, and
   can be removed afterwards.
 
+eab-mac-alg [ HS256 | HS384 | HS512 ]
+  Configure MAC algorithm used for EAB signing. Default is HS256. EAB MAC key
+  must be large enough to support specified MAC algorithm. Not all CAs support
+  algorithms other than HS256.
+
 12.9. Healthchecks
 ------------------
 
