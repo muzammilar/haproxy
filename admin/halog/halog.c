@@ -123,7 +123,7 @@ struct url_stat {
 
 #define FILT2_TIMESTAMP         0x01
 #define FILT2_PRESERVE_QUERY    0x02
-#define FILT2_EXTRACT_CAPTURE   0x04
+#define FILT2_CAPTURE_PRINT     0x04
 
 #define FILT_OUTPUT_FMT   (FILT_COUNT_ONLY| \
 			   FILT_COUNT_STATUS| \
@@ -742,7 +742,7 @@ int main(int argc, char **argv)
 	int filter_time_resp = 0;
 	int filt_http_status_low = 0, filt_http_status_high = 0;
 	unsigned int filt2_timestamp_low = 0, filt2_timestamp_high = 0;
-	unsigned int filt2_capture_block = 0, filt2_capture_field = 0;
+	unsigned int filt2_capture_print_block = 0, filt2_capture_print_field = 0;
 	int skip_fields = 1;
 
 	void (*line_filter)(const char *accept_field, const char *time_field, struct timer **tptr) = NULL;
@@ -885,7 +885,7 @@ int main(int argc, char **argv)
 			char *sep, *str;
 
 			if (argc < 2) die("missing option for -hdr (<block>:<field>)\n");
-			filter2 |= FILT2_EXTRACT_CAPTURE;
+			filter2 |= FILT2_CAPTURE_PRINT;
 
 			argc--; argv++;
 			str = *argv;
@@ -895,10 +895,10 @@ int main(int argc, char **argv)
 			else
 				*sep++ = 0;
 
-			filt2_capture_block = *str ? atol(str) : 1;
-			filt2_capture_field = *sep ? atol(sep) : 1;
+			filt2_capture_print_block = *str ? atol(str) : 1;
+			filt2_capture_print_field = *sep ? atol(sep) : 1;
 
-			if (filt2_capture_block < 1 || filt2_capture_field < 1)
+			if (filt2_capture_print_block < 1 || filt2_capture_print_field < 1)
 				die("block and field must be at least 1 for -hdr (<block>:<field>)\n");
 		}
 		else if (strcmp(argv[0], "-o") == 0) {
@@ -1131,8 +1131,8 @@ int main(int argc, char **argv)
 		if (line_filter) {
 			if (filter & FILT_COUNT_IP_COUNT)
 				filter_count_ip(source_field, accept_field, time_field, &t);
-			else if (filter2 & FILT2_EXTRACT_CAPTURE)
-				filter_print_capture(accept_field, time_field, filt2_capture_block, filt2_capture_field);
+			else if (filter2 & FILT2_CAPTURE_PRINT)
+				filter_print_capture(accept_field, time_field, filt2_capture_print_block, filt2_capture_print_field);
 			else
 				line_filter(accept_field, time_field, &t);
 		}
