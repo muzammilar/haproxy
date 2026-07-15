@@ -124,6 +124,7 @@ struct url_stat {
 #define FILT2_TIMESTAMP         0x01
 #define FILT2_PRESERVE_QUERY    0x02
 #define FILT2_CAPTURE_PRINT     0x04
+#define FILT2_CAPTURE_MATCH     0x08
 
 #define FILT_OUTPUT_FMT   (FILT_COUNT_ONLY| \
 			   FILT_COUNT_STATUS| \
@@ -173,6 +174,7 @@ void usage(FILE *output, const char *msg)
 		"  halog [input_filters]* [modifiers]* [output_format] < log\n"
 		"    inp = [-e|-E] [-H] [-Q|-QS] [-rt|-RT <time>] [-ad <delay>] [-ac <count>]\n"
 		"          [-hs|-HS [min][:[max]]] [-tcn|-TCN <termcode>] [-time [min][:[max]]]\n"
+		"          [-hdr-match <block>:<field>=<value>]\n"
 		"    mod = [-q] [-v] [-m <lines>] [-s <skipflds>] [-query]\n"
 		"    out = {-c|-u|-uc|-ue|-ua|-ut|-uao|-uto|-uba|-ubt|-hdr <block>:<field>|\n"
 		"           -cc|-gt|-pct|-st|-tc|-srv|-ic}\n"
@@ -191,7 +193,7 @@ void help()
 {
 	usage(stdout, NULL);
 	printf(
-	       "Input filters - several filters may be combined\n"
+	       "Input filters - several filters may be combined, any of them may be omitted\n"
 	       " -H                      only match lines containing HTTP logs (ignore TCP)\n"
 	       " -E                      only match lines without any error (no 5xx status)\n"
 	       " -e                      only match lines with errors (status 5xx or negative)\n"
@@ -202,7 +204,10 @@ void help()
 	       "                         within min..max. Any of them may be omitted. Exact\n"
 	       "                         code is checked for if no ':' is specified.\n"
 	       " -time <[min][:max]>     only match requests recorded between timestamps.\n"
-	       "                         Any of them may be omitted.\n"
+	       " -hdr-match <block>:<field>=<value>\n"
+	       "                         only match requests where the captured header at the\n"
+	       "                         given <block>:<field> is equal to <value>.\n"
+	       "\n"
 	       "Modifiers\n"
 	       " -v                      invert the input filtering condition\n"
 	       " -q                      don't report errors/warnings\n"
@@ -743,6 +748,8 @@ int main(int argc, char **argv)
 	int filt_http_status_low = 0, filt_http_status_high = 0;
 	unsigned int filt2_timestamp_low = 0, filt2_timestamp_high = 0;
 	unsigned int filt2_capture_print_block = 0, filt2_capture_print_field = 0;
+	unsigned int filt2_capture_match_block = 0, filt2_capture_match_field = 0;
+	struct ist filt2_capture_match_value = IST_NULL;
 	int skip_fields = 1;
 
 	void (*line_filter)(const char *accept_field, const char *time_field, struct timer **tptr) = NULL;
@@ -901,6 +908,33 @@ int main(int argc, char **argv)
 			if (filt2_capture_print_block < 1 || filt2_capture_print_field < 1)
 				die("block and field must be at least 1 for -hdr (<block>:<field>)\n");
 		}
+		else if (strcmp(argv[0], "-hdr-match") == 0) {
+			char *colon, *equals, *str;
+
+			if (argc < 2) die("missing option for -hdr-match (<block>:<field>=<value>)\n");
+			filter2 |= FILT2_CAPTURE_MATCH;
+
+			argc--; argv++;
+			str = *argv;
+			colon = strchr(str, ':');
+			if (!colon)
+				die("missing colon in -hdr-match (<block>:<field>=<value>)\n");
+			else
+				*colon++ = 0;
+
+			equals = strchr(colon, '=');
+			if (!equals)
+				die("missing equals in -hdr-match (<block>:<field>=<value>)\n");
+			else
+				*equals++ = 0;
+
+			filt2_capture_match_block = *str ? atol(str) : 1;
+			filt2_capture_match_field = *colon ? atol(colon) : 1;
+			filt2_capture_match_value = ist(equals);
+
+			if (filt2_capture_match_block < 1 || filt2_capture_match_field < 1)
+				die("block and field must be at least 1 for -hdr-match (<block>:<field>=<value>)\n");
+		}
 		else if (strcmp(argv[0], "-o") == 0) {
 			if (output_file)
 				die("Fatal: output file name already specified.\n");
@@ -993,6 +1027,17 @@ int main(int argc, char **argv)
 		if (accept_field[1] < '0' || accept_field[1] > '3') {
 			parse_err++;
 			continue;
+		}
+
+		if (filter2 & FILT2_CAPTURE_MATCH) {
+			struct ist capture = filter_extract_capture(accept_field, time_field, filt2_capture_match_block, filt2_capture_match_field);
+
+			if (unlikely(!isttest(capture))) {
+				truncated_line(linenum, line);
+				continue;
+			}
+
+			test &= isteq(capture, filt2_capture_match_value);
 		}
 
 		if (filter2 & FILT2_TIMESTAMP) {
