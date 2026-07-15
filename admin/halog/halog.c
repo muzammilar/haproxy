@@ -27,6 +27,8 @@
 #include <import/ebistree.h>
 #include <import/ebsttree.h>
 
+#include <import/ist.h>
+
 #define SOURCE_FIELD 5
 #define ACCEPT_FIELD 6
 #define SERVER_FIELD 8
@@ -158,7 +160,8 @@ void filter_count_term_codes(const char *accept_field, const char *time_field, s
 void filter_count_status(const char *accept_field, const char *time_field, struct timer **tptr);
 void filter_graphs(const char *accept_field, const char *time_field, struct timer **tptr);
 void filter_output_line(const char *accept_field, const char *time_field, struct timer **tptr);
-void filter_extract_capture(const char *accept_field, const char *time_field, unsigned int, unsigned int);
+struct ist filter_extract_capture(const char *accept_field, const char *time_field, unsigned int, unsigned int);
+void filter_print_capture(const char *accept_field, const char *time_field, unsigned int, unsigned int);
 void filter_accept_holes(const char *accept_field, const char *time_field, struct timer **tptr);
 
 void usage(FILE *output, const char *msg)
@@ -1129,7 +1132,7 @@ int main(int argc, char **argv)
 			if (filter & FILT_COUNT_IP_COUNT)
 				filter_count_ip(source_field, accept_field, time_field, &t);
 			else if (filter2 & FILT2_EXTRACT_CAPTURE)
-				filter_extract_capture(accept_field, time_field, filt2_capture_block, filt2_capture_field);
+				filter_print_capture(accept_field, time_field, filt2_capture_block, filt2_capture_field);
 			else
 				line_filter(accept_field, time_field, &t);
 		}
@@ -1388,7 +1391,7 @@ void filter_output_line(const char *accept_field, const char *time_field, struct
 	lines_out++;
 }
 
-void filter_extract_capture(const char *accept_field, const char *time_field, unsigned int block, unsigned int field)
+struct ist filter_extract_capture(const char *accept_field, const char *time_field, unsigned int block, unsigned int field)
 {
 	const char *e, *f;
 
@@ -1408,15 +1411,12 @@ void filter_extract_capture(const char *accept_field, const char *time_field, un
 		}
 
 		if (unlikely(!*e)) {
-			truncated_line(linenum, line);
-			return;
+			return IST_NULL;
 		}
 
 		/* We reached the URL, no more captures will follow. */
 		if (*e != '{') {
-			puts("");
-			lines_out++;
-			return;
+			return ist("");
 		}
 
 		/* e points the the opening brace of the capture block. */
@@ -1431,14 +1431,11 @@ void filter_extract_capture(const char *accept_field, const char *time_field, un
 			e++;
 
 		if (unlikely(!*e)) {
-			truncated_line(linenum, line);
-			return;
+			return IST_NULL;
 		}
 
 		if (*e != '|') {
-			puts("");
-			lines_out++;
-			return;
+			return ist("");
 		}
 
 		/* e points to the pipe. */
@@ -1452,11 +1449,22 @@ void filter_extract_capture(const char *accept_field, const char *time_field, un
 		f++;
 
 	if (unlikely(!*f)) {
+		return IST_NULL;
+	}
+
+	return ist2(e, f - e);
+}
+
+void filter_print_capture(const char *accept_field, const char *time_field, unsigned int block, unsigned int field)
+{
+	struct ist capture = filter_extract_capture(accept_field, time_field, block, field);
+
+	if (unlikely(!isttest(capture))) {
 		truncated_line(linenum, line);
 		return;
 	}
 
-	fwrite(e, f - e, 1, stdout);
+	fwrite(istptr(capture), istlen(capture), 1, stdout);
 	putchar('\n');
 	lines_out++;
 }
