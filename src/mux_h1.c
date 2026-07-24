@@ -3744,6 +3744,7 @@ static void h1_alert(struct h1s *h1s)
 static int h1_send_error(struct h1c *h1c)
 {
 	struct buffer *errmsg = NULL;
+	struct h1_hdrs_map *hdrs_map = h1_get_hdrs_map(h1c, 1);
 	int rc = http_get_status_idx(h1c->errcode);
 	int ret = 0;
 
@@ -3762,6 +3763,9 @@ static int h1_send_error(struct h1c *h1c)
 		errmsg = h1c->px->replies[rc]->body.errmsg;
 	}
 
+	if (!errmsg)
+		errmsg = &http_err_chunks[rc];
+
 	if (h1c->flags & (H1C_F_OUT_ALLOC|H1C_F_OUT_FULL)) {
 		h1c->flags |= H1C_F_ABRT_PENDING;
 		goto out;
@@ -3772,13 +3776,8 @@ static int h1_send_error(struct h1c *h1c)
 		TRACE_STATE("waiting for h1c obuf allocation", H1_EV_H1C_ERR|H1_EV_H1C_BLK, h1c->conn);
 		goto out;
 	}
-	if (errmsg) {
-		struct h1_hdrs_map *hdrs_map = h1_get_hdrs_map(h1c, 1);
 
-		ret = h1_format_htx_msg(htxbuf(errmsg), &h1c->obuf, hdrs_map);
-	}
-	else
-		ret = b_istput(&h1c->obuf, ist(http_err_msgs[rc]));
+	ret = h1_format_htx_msg(htxbuf(errmsg), &h1c->obuf, hdrs_map);
 	if (unlikely(ret <= 0)) {
 		if (!ret) {
 			h1c->flags |= (H1C_F_OUT_FULL|H1C_F_ABRT_PENDING);
