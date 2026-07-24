@@ -580,7 +580,7 @@ void hld_summary(void)
 	tot_ttfb = tot_ttlb = tot_fbs = tot_lbs = 0;
 	tot_sc[0] = tot_sc[1] = tot_sc[2] = tot_sc[3] = tot_sc[4] = 0;
 
-	for (th = 0; th < global.nbthread; th++) {
+	for (th = 0; th < arg_thrd; th++) {
 		cur_conn += HA_ATOMIC_LOAD(&thrs_info[th].curconn);
 		tot_conn += HA_ATOMIC_LOAD(&thrs_info[th].tot_conn);
 		tot_req  += HA_ATOMIC_LOAD(&thrs_info[th].tot_done);
@@ -794,7 +794,7 @@ static struct task *mtask_cb(struct task *t, void *context, unsigned int state)
 		if (throttle) {
 			int i, nb_usr;
 
-			for (i = 0; i < global.nbthread; i++) {
+			for (i = 0; i < arg_thrd; i++) {
 				nb_usr = mul32hi(thrs_info[i].maxusrs, throttle);
 				nb_usr = nb_usr ? nb_usr : 1;
 
@@ -824,7 +824,7 @@ static struct task *mtask_cb(struct task *t, void *context, unsigned int state)
 				struct hld_usr *hu;
 				int req = arg_reqs == -1 ? -1 : (arg_reqs + usr_cnt) / arg_usr;
 
-				hu = hld_new_usr(req, usr_tid++ % global.nbthread);
+				hu = hld_new_usr(req, usr_tid++ % arg_thrd);
 				if (!hu) {
 					ha_alert("could not allocate a new haload user\n");
 					break;
@@ -1831,7 +1831,7 @@ static void hld_dealloc_rate_task(void)
 	if (!hld_rate_tasks)
 		return;
 
-	for (i = 0; i < global.nbthread; i++) {
+	for (i = 0; i < arg_thrd; i++) {
 		task_destroy(hld_rate_tasks[i]);
 		hld_rate_tasks[i] = NULL;
 	}
@@ -1844,14 +1844,14 @@ static int hld_alloc_thrs_info(void)
 {
 	int i;
 
-	thrs_info = calloc(global.nbthread, sizeof(*thrs_info));
+	thrs_info = calloc(arg_thrd, sizeof(*thrs_info));
 	if (!thrs_info) {
 		ha_alert("failed to alloct threads information array.\n");
 		return 0;
 	}
 
-	for (i = 0; i < global.nbthread; i++)
-		thrs_info[i].maxusrs = (arg_usr + i) / global.nbthread;
+	for (i = 0; i < arg_thrd; i++)
+		thrs_info[i].maxusrs = (arg_usr + i) / arg_thrd;
 
 	return 1;
 }
@@ -1946,13 +1946,13 @@ static int hld_init(void)
 	if (arg_rate) {
 		int i;
 
-		hld_rate_tasks = calloc(global.nbthread, sizeof(*hld_rate_tasks));
+		hld_rate_tasks = calloc(arg_thrd, sizeof(*hld_rate_tasks));
 		if (!hld_rate_tasks) {
 			ha_alert("could not allocate arg rate tasks\n");
 			goto err;
 		}
 
-		for (i = 0; i < global.nbthread; i++) {
+		for (i = 0; i < arg_thrd; i++) {
 			struct task *t;
 
 			t = task_new_on(i);
