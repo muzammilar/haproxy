@@ -100,7 +100,7 @@ int arg_rcon = -1;     // max requests per conn
 int arg_reqs = -1;     // max total requests
 int arg_serr;          // stop on first error
 int arg_slow;          // slow start: delay in milliseconds
-int arg_thrd = 1;      // number of threads
+int arg_thrd;          // number of threads
 int arg_usr = 1;       // number of users
 int arg_wait = 10000;  // I/O time out (ms)
 
@@ -1915,6 +1915,20 @@ static int hld_init(void)
 
 	if (!hld_cfg_finalize())
 		goto err;
+
+	/* This is the location to initialize the default value for <arg_thrd>.
+	 * Indeed, global.nthread is initialized late(after the parsing step).
+	 */
+	if (arg_thrd == 0)
+		arg_thrd = global.nbthread;
+
+	if (arg_rate && arg_thrd > arg_usr) {
+		ha_alert("Thread count (%d) must not exceed connection count (%d)\n",
+		         arg_thrd, arg_usr);
+		goto err;
+	}
+
+	BUG_ON(arg_thrd != global.nbthread);
 
 	/* Consider the case where <arg_reqs> < <arg_usr> */
 	if (arg_reqs != -1 && arg_reqs < arg_usr)

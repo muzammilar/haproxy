@@ -28,7 +28,7 @@ static void  hld_usage(char *name, int argc)
 		"        -n <reqs>        maximum total requests (-1)\n"
 		"        -r <reqs>        number of requests per connection (-1)\n"
 		"        -s <time>        soft start: time in sec to reach 100%% load\n"
-		"        -t <threads>     number of threads (1)\n"
+		"        -t <threads>     force number of threads (nbthread)\n"
 		"        -u <users>       number of users (1)\n"
 		"        -w <time>        I/O timeout in milliseconds (10000)\n"
 		"        -A               ignore 1st req for resp time measurements\n"
@@ -50,7 +50,8 @@ static void  hld_usage(char *name, int argc)
 		"URL format:\n"
 		"        (http|https|quic)://<addr>:<port>/<path>\n"
 		"Note: Options marked with an asterisk (*) are positional and MUST be placed\n"
-		"      BEFORE the URLs they are intended to affect.\n",
+		"      BEFORE the URLs they are intended to affect.\n"
+		"Note: When <arg_rate> is set, <arg_thrd> must be lesser or equal to <arg_usr>\n",
 		name);
 	exit(1);
 }
@@ -655,14 +656,10 @@ void haproxy_init_args(int argc, char **argv)
 		goto leave;
 	}
 
-	if (arg_thrd > arg_usr) {
-		ha_alert("Thread count must not exceed connection count\n");
-		goto leave;
-	}
-
 	/* "global" section */
 	hbuf_appendf(&buf, "%.*s", (int)gbuf.data, gbuf.area);
-	hbuf_appendf(&buf, "\tnbthread %d\n", arg_thrd);
+	if (arg_thrd != 0)
+		hbuf_appendf(&buf, "\tnbthread %d\n", arg_thrd);
 	if (arg_mreqs)
 		hbuf_appendf(&buf,
 		             "\ttune.h2.be.max-concurrent-streams %d\n", arg_mreqs);
