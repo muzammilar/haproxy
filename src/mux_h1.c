@@ -2916,7 +2916,7 @@ static size_t h1_make_eoh(struct h1s *h1s, struct h1m *h1m, struct htx *htx, siz
                          */
 			h1_generate_random_ws_input_key(h1s->ws_key);
 
-			if (!h1_format_htx_hdr(ist("Sec-Websocket-Key"),
+			if (!h1_format_htx_hdr(ist("sec-websocket-key"),
 					       ist(h1s->ws_key),
 					       &outbuf, hdrs_map)) {
 				goto full;
@@ -2927,7 +2927,7 @@ static size_t h1_make_eoh(struct h1s *h1s, struct h1m *h1m, struct htx *htx, siz
 			char key[29];
 
 			h1_calculate_ws_output_key(h1s->ws_key, key);
-			if (!h1_format_htx_hdr(ist("Sec-Websocket-Accept"),
+			if (!h1_format_htx_hdr(ist("sec-websocket-accept"),
 					       ist(key),
 					       &outbuf, hdrs_map)) {
 				goto full;
